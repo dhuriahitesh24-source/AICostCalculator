@@ -3,14 +3,9 @@ import pandas as pd
 
 st.set_page_config(page_title="Azure AI Token Calculator", layout="wide")
 st.title("🤖 Azure AI Token & Consumption Canvas")
-st.markdown("This calculator focuses strictly on **AI Service Costs** (STT & OpenAI Tokens).")
+st.markdown("This calculator estimates **AI Service Costs** over a specific duration.")
 
-# --- SIDEBAR: GLOBAL SETTINGS & UNIT PRICES ---
-st.sidebar.header("⚙️ Global Settings")
-# Added duration parameter
-num_months = st.sidebar.slider("Calculation Period (Months)", min_value=1, max_value=36, value=1)
-
-st.sidebar.divider()
+# --- SIDEBAR: UNIT PRICES ---
 st.sidebar.header("🏷️ Azure Unit Pricing (GPT-4o)")
 p_stt = st.sidebar.number_input("Speech-to-Text ($/hr)", value=0.36, format="%.2f")
 p_gpt_in = st.sidebar.number_input("GPT-4o Input ($/1M tokens)", value=2.50, format="%.2f")
@@ -18,7 +13,10 @@ p_gpt_out = st.sidebar.number_input("GPT-4o Output ($/1M tokens)", value=10.00, 
 p_embed = st.sidebar.number_input("Embeddings ($/1M tokens)", value=0.02, format="%.4f")
 
 # --- PART 1: INPUT PARAMETERS & ASSUMPTIONS ---
-st.header("1️⃣ Input Parameters & Assumptions (Per Month)")
+st.header("1️⃣ Input Parameters & Duration")
+# New Parameter for Duration
+num_months = st.number_input("Number of Months for Projection", min_value=1, value=1, step=1)
+
 col_a, col_b = st.columns(2)
 
 with col_a:
@@ -31,71 +29,81 @@ with col_a:
 with col_b:
     st.subheader("🔍 RAG Queries (Phase 2)")
     total_users = st.number_input("Number of Active Users", value=500)
-    queries_per_user_day = st.number_input("Queries per User/Day", value=30)
+    queries_per_day = st.number_input("Queries per User/Day", value=30)
     days_per_month = st.number_input("Days per Month", value=30)
     rag_context_tokens = st.number_input("Context Tokens per Query (Input)", value=1500)
     rag_answer_tokens = st.number_input("Answer Tokens per Query (Output)", value=250)
 
-# --- CALCULATIONS (Scaled by num_months) ---
-# Multiplier for total period
-total_sessions = monthly_sessions * num_months
-total_queries = total_users * queries_per_user_day * days_per_month * num_months
+# --- CALCULATIONS (Updated for Months) ---
 
-# Phase 1: Ingestion logic (Total over period)
-total_hours = total_sessions * avg_session_hr
-ingest_in_tokens = (total_hours * words_per_hr * 1.35) 
-ingest_out_tokens = (total_sessions * sud_output_tokens)
+# Monthly Totals
+m_total_hours = monthly_sessions * avg_session_hr
+m_ingest_in = (m_total_hours * words_per_hr * 1.35) 
+m_ingest_out = (monthly_sessions * sud_output_tokens)
 
-# Phase 2: RAG logic (Total over period)
-rag_in_tokens = total_queries * (rag_context_tokens + 50) 
-rag_out_tokens = total_queries * rag_answer_tokens
-rag_embed_tokens = total_queries * 100 
+m_queries = total_users * queries_per_day * days_per_month
+m_rag_in = m_queries * (rag_context_tokens + 50)
+m_rag_out = m_queries * rag_answer_tokens
+m_rag_embed = m_queries * 100
 
-# Total Period Costs
+# Total Period Totals (Months * Monthly)
+total_hours = m_total_hours * num_months
+ingest_in_tokens = m_ingest_in * num_months
+ingest_out_tokens = m_ingest_out * num_months
+total_queries = m_queries * num_months
+rag_in_tokens = m_rag_in * num_months
+rag_out_tokens = m_rag_out * num_months
+rag_embed_tokens = m_rag_embed * num_months
+
+# Costs (Total for the period)
 cost_stt = total_hours * p_stt
 cost_ingest = ((ingest_in_tokens / 1e6) * p_gpt_in) + ((ingest_out_tokens / 1e6) * p_gpt_out)
 cost_rag = ((rag_in_tokens / 1e6) * p_gpt_in) + ((rag_out_tokens / 1e6) * p_gpt_out) + ((rag_embed_tokens / 1e6) * p_embed)
 
 total_ai_cost = cost_stt + cost_ingest + cost_rag
-total_in_tokens = ingest_in_tokens + rag_in_tokens
-total_out_tokens = ingest_out_tokens + rag_out_tokens
 
-# --- PART 2: TOKEN COUNT & COST BREAKUP ---
-st.header(f"2️⃣ Total Consumption & Cost for {num_months} Month(s)")
+# --- PART 2: SUMMARY TAB ---
+st.header(f"2️⃣ Cost Summary ({num_months} Months)")
 
-summary_df = pd.DataFrame([
+summary_data = [
     {
         "Workload": "Phase 1: Transcription (STT)",
-        "Total Tokens (In/Out)": "N/A",
-        "Metric": f"{total_hours:,.0f} Total Hrs",
-        "Monthly Cost": f"${(cost_stt / num_months):,.2f}",
+        "Metric": f"{total_hours:,.0f} Total Hours",
+        "Monthly Cost": cost_stt / num_months,
         "Total Cost": cost_stt
     },
     {
         "Workload": "Phase 1: Detailed SUD Gen",
-        "Total Tokens (In/Out)": f"{(ingest_in_tokens + ingest_out_tokens)/1e6:.2f}M",
-        "Metric": f"{total_sessions:,.0f} Sessions",
-        "Monthly Cost": f"${(cost_ingest / num_months):,.2f}",
+        "Metric": f"{ingest_in_tokens/1e6:.2f}M In / {ingest_out_tokens/1e6:.2f}M Out",
+        "Monthly Cost": cost_ingest / num_months,
         "Total Cost": cost_ingest
     },
     {
-        "Workload": "Phase 2: RAG Knowledge Access",
-        "Total Tokens (In/Out)": f"{(rag_in_tokens + rag_out_tokens)/1e6:.2f}M",
-        "Metric": f"{total_queries:,.0f} Queries",
-        "Monthly Cost": f"${(cost_rag / num_months):,.2f}",
+        "Workload": "Phase 2: RAG Access",
+        "Metric": f"{total_queries:,.0f} Total Queries",
+        "Monthly Cost": cost_rag / num_months,
         "Total Cost": cost_rag
+    },
+    {
+        "Workload": "**Grand Total**",
+        "Metric": "-",
+        "Monthly Cost": total_ai_cost / num_months,
+        "Total Cost": total_ai_cost
     }
-])
+]
 
-st.table(summary_df)
+summary_df = pd.DataFrame(summary_data)
+# Format as currency
+st.table(summary_df.style.format({
+    "Monthly Cost": "${:,.2f}",
+    "Total Cost": "${:,.2f}"
+}))
 
-# Final Summary Metrics
+# Metrics
 st.divider()
-st.subheader(f"📊 Summary for {num_months} Month Period")
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Total Tokens", f"{(total_in_tokens + total_out_tokens)/1e6:.2f}M")
-m2.metric("Avg. Monthly Cost", f"${(total_ai_cost / num_months):,.2f}")
-m3.metric("Total Period Cost", f"${total_ai_cost:,.2f}", delta=None)
-m4.metric("Cost per Session", f"${(total_ai_cost / total_sessions):,.2f}" if total_sessions > 0 else 0)
+m1, m2, m3 = st.columns(3)
+m1.metric("Avg Monthly Cost", f"${(total_ai_cost / num_months):,.2f}")
+m2.metric(f"Total Cost ({num_months}mo)", f"${total_ai_cost:,.2f}")
+m3.metric("Total Tokens (In/Out)", f"{(ingest_in_tokens + ingest_out_tokens + rag_in_tokens + rag_out_tokens)/1e6:.2f}M")
 
-st.info(f"**Note:** Calculations are based on a **{num_months} month** duration. Input tokens represent {(total_in_tokens/(total_in_tokens+total_out_tokens))*100:.1f}% of your volume.")
+st.info(f"The calculation assumes usage remains constant over the **{num_months} month(s)**.")
